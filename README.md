@@ -11,15 +11,13 @@ not first, are left untouched.
 ## Setup
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install .
+uv sync
 ```
 
 ## Usage
 
 ```
-python migrate.py \
+uv run python migrate.py \
   --realm <realm-name> \
   --db-host <host> \
   --db-port 5432 \
@@ -36,7 +34,7 @@ python migrate.py \
 ### 1. Dry-run first — check the numbers
 
 ```bash
-python migrate.py --realm myrealm --db-host db.example.com --db-name keycloak \
+uv run python migrate.py --realm myrealm --db-host db.example.com --db-name keycloak \
   --db-user keycloak --db-password secret --batch-size 500
 ```
 
@@ -50,7 +48,7 @@ DRY RUN — no changes made
 ### 2. Run 1 — first 500 users
 
 ```bash
-python migrate.py --realm myrealm --db-host db.example.com --db-name keycloak \
+uv run python migrate.py --realm myrealm --db-host db.example.com --db-name keycloak \
   --db-user keycloak --db-password secret --batch-size 500 --execute
 ```
 
@@ -60,7 +58,7 @@ count dropped to ~743 (total − 500).
 ### 3. Run 2 — all remaining users
 
 ```bash
-python migrate.py --realm myrealm --db-host db.example.com --db-name keycloak \
+uv run python migrate.py --realm myrealm --db-host db.example.com --db-name keycloak \
   --db-user keycloak --db-password secret --batch-size 0 --execute
 ```
 
@@ -81,7 +79,7 @@ Log files are gitignored.
 Run a full Keycloak 26.6.3 + PostgreSQL stack locally with pre-seeded test
 users so you can verify the migration end-to-end.
 
-**Prerequisites:** Docker, Docker Compose, `uv` (or `pip`)
+**Prerequisites:** Docker, Docker Compose, `uv`
 
 ### 1. Start the stack and seed test data
 
