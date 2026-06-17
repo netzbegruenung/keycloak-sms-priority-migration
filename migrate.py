@@ -27,9 +27,6 @@ import psycopg2.extras
 # Credential types that count as "another 2FA method"
 OTHER_2FA_TYPES = ("otp", "webauthn", "APP_CREDENTIAL")
 
-# Base query: SMS at position 1, user has at least one other 2FA.
-# The final SELECT is used in dry-run (no LIMIT) to get the true total.
-# The same query with LIMIT is used for execute mode.
 _SELECT_ELIGIBLE = """
 SELECT
     c.id            AS credential_id,
@@ -61,6 +58,65 @@ UPDATE credential
 SET    priority = %(target_priority)s
 WHERE  id = ANY(%(credential_ids)s)
 """
+
+
+def fetch_eligible(cur, realm_name, limit=None):
+    sql = _SELECT_ELIGIBLE
+    if limit:
+        sql += f"LIMIT {limit}"
+    cur.execute(sql, {"realm_name": realm_name, "other_types": list(OTHER_2FA_TYPES)})
+    return cur.fetchall()
+
+
+def dry_run_counts(conn, realm_name, batch_size):
+    """Returns {"total": N, "effective": N}. Never modifies the database."""
+    with conn.cursor() as cur:
+        all_rows = fetch_eligible(cur, realm_name, limit=None)
+    total = len(all_rows)
+    effective = total if batch_size == 0 else min(total, batch_size)
+    return {"total": total, "effective": effective}
+
+
+def execute_migration(conn, realm_name, target_priority, batch_size):
+    """
+    Updates SMS credential priority for eligible users.
+
+    Does NOT commit — the caller is responsible for commit/rollback.
+    Returns {"updated": N, "rows": [...]}.
+    """
+    limit = batch_size if batch_size > 0 else None
+    with conn.cursor() as cur:
+        rows = fetch_eligible(cur, realm_name, limit=limit)
+        if not rows:
+            return {"updated": 0, "rows": []}
+        credential_ids = [row["credential_id"] for row in rows]
+        cur.execute(
+            _UPDATE_PRIORITY,
+            {"target_priority": target_priority, "credential_ids": credential_ids},
+        )
+        updated = cur.rowcount
+    return {"updated": updated, "rows": list(rows)}
+
+
+def write_audit_log(rows, target_priority):
+    os.makedirs("logs", exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = os.path.join("logs", f"migration-{ts}.jsonl")
+    with open(path, "w") as fh:
+        for row in rows:
+            fh.write(
+                json.dumps(
+                    {
+                        "credential_id": row["credential_id"],
+                        "user_id": row["user_id"],
+                        "username": row["username"],
+                        "old_priority": row["current_priority"],
+                        "new_priority": target_priority,
+                    }
+                )
+                + "\n"
+            )
+    return path
 
 
 def parse_args():
@@ -117,35 +173,6 @@ def connect(args):
     )
 
 
-def fetch_eligible(cur, realm_name, limit=None):
-    sql = _SELECT_ELIGIBLE
-    if limit:
-        sql += f"LIMIT {limit}"
-    cur.execute(sql, {"realm_name": realm_name, "other_types": list(OTHER_2FA_TYPES)})
-    return cur.fetchall()
-
-
-def write_audit_log(rows, target_priority):
-    os.makedirs("logs", exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path = os.path.join("logs", f"migration-{ts}.jsonl")
-    with open(path, "w") as fh:
-        for row in rows:
-            fh.write(
-                json.dumps(
-                    {
-                        "credential_id": row["credential_id"],
-                        "user_id": row["user_id"],
-                        "username": row["username"],
-                        "old_priority": row["current_priority"],
-                        "new_priority": target_priority,
-                    }
-                )
-                + "\n"
-            )
-    return path
-
-
 def main():
     args = parse_args()
 
@@ -155,41 +182,30 @@ def main():
         print(f"ERROR: Could not connect to database: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    with conn:
-        with conn.cursor() as cur:
-            if args.dry_run:
-                # Always query without LIMIT in dry-run to show true total
-                all_rows = fetch_eligible(cur, args.realm)
-                total = len(all_rows)
-                effective = total if args.batch_size == 0 else min(total, args.batch_size)
-                print("DRY RUN — no changes made")
-                print(f"  Total eligible:        {total}")
-                if args.batch_size > 0:
-                    print(f"  This run (limit {args.batch_size}): {effective}")
-                else:
-                    print(f"  This run (no limit):   {effective}")
+    try:
+        if args.dry_run:
+            counts = dry_run_counts(conn, args.realm, args.batch_size)
+            print("DRY RUN — no changes made")
+            print(f"  Total eligible:        {counts['total']}")
+            if args.batch_size > 0:
+                print(f"  This run (limit {args.batch_size}): {counts['effective']}")
             else:
-                limit = args.batch_size if args.batch_size > 0 else None
-                rows = fetch_eligible(cur, args.realm, limit=limit)
-
-                if not rows:
-                    print("No eligible users found. Nothing to do.")
-                    return
-
-                credential_ids = [row["credential_id"] for row in rows]
-                cur.execute(
-                    _UPDATE_PRIORITY,
-                    {
-                        "target_priority": args.priority,
-                        "credential_ids": credential_ids,
-                    },
-                )
-                updated = cur.rowcount
-                log_path = write_audit_log(rows, args.priority)
-                print(f"Updated {updated} SMS credential(s) to priority {args.priority}.")
+                print(f"  This run (no limit):   {counts['effective']}")
+        else:
+            result = execute_migration(conn, args.realm, args.priority, args.batch_size)
+            if result["updated"] == 0:
+                print("No eligible users found. Nothing to do.")
+            else:
+                conn.commit()
+                log_path = write_audit_log(result["rows"], args.priority)
+                print(f"Updated {result['updated']} SMS credential(s) to priority {args.priority}.")
                 print(f"Audit log: {log_path}")
-
-    conn.close()
+    except Exception as exc:
+        conn.rollback()
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
