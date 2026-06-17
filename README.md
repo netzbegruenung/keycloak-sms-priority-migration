@@ -74,6 +74,15 @@ Each `--execute` run writes a JSON-lines file to `logs/migration-<timestamp>.jso
 
 Log files are gitignored.
 
+## Tests
+
+The test suite uses an in-memory DuckDB database — no Docker or PostgreSQL needed.
+
+```bash
+uv sync --extra test
+uv run pytest
+```
+
 ## Local dev environment
 
 Run a full Keycloak 26.6.3 + PostgreSQL stack locally with pre-seeded test
