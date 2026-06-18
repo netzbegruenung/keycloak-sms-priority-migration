@@ -125,7 +125,8 @@ def _post(url, token, data):
 
 
 def _put(url, token, data):
-    _request("PUT", url, token=token, data=data, expected=(200, 201, 204))
+    status, _ = _request("PUT", url, token=token, data=data, expected=(200, 201, 204))
+    return status
 
 
 def _delete(url, token):
@@ -221,23 +222,34 @@ def create_user(kc_url, token, realm, username):
     existing = get_user_id(kc_url, token, realm, username)
     if existing:
         print(f"  user '{username}' already exists")
-        return existing
+        user_id = existing
+    else:
+        status, _ = _post(
+            f"{kc_url}/admin/realms/{realm}/users",
+            token,
+            {"username": username, "enabled": True},
+        )
+        if status not in (201, 409):
+            print(f"  WARNING: unexpected status {status} creating user '{username}'")
 
-    status, _ = _post(
-        f"{kc_url}/admin/realms/{realm}/users",
-        token,
-        {"username": username, "enabled": True},
-    )
-    if status not in (201, 409):
-        print(f"  WARNING: unexpected status {status} creating user '{username}'")
+        user_id = get_user_id(kc_url, token, realm, username)
+        if user_id is None:
+            print(f"  WARNING: could not resolve user_id for '{username}', skipping password reset")
+            return None
 
-    user_id = get_user_id(kc_url, token, realm, username)
-    _put(
-        f"{kc_url}/admin/realms/{realm}/users/{user_id}/reset-password",
-        token,
-        {"type": "password", "value": _DEFAULT_PASSWORD, "temporary": False},
-    )
-    print(f"  created user '{username}'")
+    try:
+        status = _put(
+            f"{kc_url}/admin/realms/{realm}/users/{user_id}/reset-password",
+            token,
+            {"type": "password", "value": _DEFAULT_PASSWORD, "temporary": False},
+        )
+        if status != 204:
+            print(f"  WARNING: unexpected status {status} setting password for '{username}'")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        print(f"  ERROR: failed to set password for '{username}': HTTP {e.code} – {body}")
+
+    print(f"  {'updated' if existing else 'created'} user '{username}'")
     return user_id
 
 
@@ -245,7 +257,7 @@ def insert_credentials(db_conn, user_id, credentials):
     created_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     with db_conn.cursor() as cur:
         # Remove existing credentials for this user before inserting
-        cur.execute("DELETE FROM credential WHERE user_id = %s", (user_id,))
+        cur.execute("DELETE FROM credential WHERE user_id = %s AND type <> 'password'", (user_id,))
         for cred_type, priority, secret_data, cred_data, label in credentials:
             cur.execute(
                 """
