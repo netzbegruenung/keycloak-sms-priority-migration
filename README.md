@@ -173,7 +173,7 @@ uv sync
 docker compose up -d
 
 # Download plugin JARs and seed test data (waits for Keycloak automatically)
-uv run python dev/seed.py --db-password keycloak
+uv run python dev/seed.py
 ```
 
 The seed script downloads three plugin JARs into `dev/providers/` on first run

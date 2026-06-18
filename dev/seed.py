@@ -398,11 +398,7 @@ def parse_args():
     p.add_argument("--db-port", type=int, default=5432)
     p.add_argument("--db-name", default="keycloak")
     p.add_argument("--db-user", default="keycloak")
-    p.add_argument(
-        "--db-password",
-        default=os.environ.get("DB_PASSWORD", ""),
-        help="PostgreSQL password (or set DB_PASSWORD env var)",
-    )
+    p.add_argument("--db-password", default="keycloak")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--reset", action="store_true", help="Restore original credential priorities")
     mode.add_argument("--clean", action="store_true", help="Delete the test realm and all its data")
