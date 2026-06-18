@@ -52,7 +52,7 @@ _PROVIDERS_DIR = os.path.join(os.path.dirname(__file__), "providers")
 
 _TOTP_SECRET = "JBSWY3DPEHPK3PXP"
 
-_OTP_SECRET_DATA = json.dumps({"value": _TOTP_SECRET, "salt": None})
+_OTP_SECRET_DATA = json.dumps({"value": _TOTP_SECRET})
 _OTP_CREDENTIAL_DATA = json.dumps(
     {"subType": "totp", "digits": 6, "period": 30, "algorithm": "HmacSHA1"}
 )
@@ -91,7 +91,7 @@ _TEST_USERS = [
     ),
 ]
 
-_DEFAULT_PASSWORD = "Test1234!"
+_DEFAULT_PASSWORD = "pass"
 
 # ---------------------------------------------------------------------------
 # HTTP helpers
@@ -177,9 +177,10 @@ def download_jars():
 def wait_for_keycloak(kc_url, timeout=180):
     print(f"Waiting for Keycloak at {kc_url} …", end="", flush=True)
     deadline = time.time() + timeout
+    health_url = kc_url.replace(":8080", ":9000") + "/health/ready"
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(f"{kc_url}/health/ready", timeout=3) as r:
+            with urllib.request.urlopen(health_url, timeout=3) as r:
                 if r.status == 200:
                     print(" ready.")
                     return
