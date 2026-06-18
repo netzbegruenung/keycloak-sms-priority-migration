@@ -288,7 +288,7 @@ def seed(args):
     wait_for_keycloak(args.kc_url)
 
     print("\n3. Authenticating …")
-    token = _get_admin_token(args.kc_url, "admin", "admin")
+    token = _get_admin_token(args.kc_url, "admin", "pass")
 
     print(f"\n4. Creating realm '{args.realm}' …")
     create_realm(args.kc_url, token, args.realm)
@@ -345,7 +345,7 @@ def reset(args):
 
     print("  authenticating …")
     wait_for_keycloak(args.kc_url)
-    token = _get_admin_token(args.kc_url, "admin", "admin")
+    token = _get_admin_token(args.kc_url, "admin", "pass")
 
     db_conn = psycopg2.connect(
         host=args.db_host,
@@ -377,7 +377,7 @@ def reset(args):
 def clean(args):
     print(f"Deleting realm '{args.realm}' …")
     wait_for_keycloak(args.kc_url)
-    token = _get_admin_token(args.kc_url, "admin", "admin")
+    token = _get_admin_token(args.kc_url, "admin", "pass")
     _delete(f"{args.kc_url}/admin/realms/{args.realm}", token)
     print(f"Realm '{args.realm}' deleted (users and credentials removed).")
     print("Plugin JARs in dev/providers/ are kept.")
