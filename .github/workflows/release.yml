@@ -18,7 +18,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install build and test dependencies
-        run: pip install build pytest duckdb
+        run: pip install build ".[test]"
 
       - name: Run tests
         run: pytest
