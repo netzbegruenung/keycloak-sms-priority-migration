@@ -94,6 +94,7 @@ uv run python migrate.py \
   [--kc-admin-user <user>]      # dev fallback (default: admin)
   [--kc-admin-password <pw>]    # dev fallback, or export KC_ADMIN_PASSWORD=<pw>
   [--batch-size 500]            # max users per run; 0 = no limit (default: 500)
+  [--username <name>]           # migrate only this user (mutually exclusive with --batch-size)
   [--dry-run | --execute]       # dry-run is the default
 ```
 

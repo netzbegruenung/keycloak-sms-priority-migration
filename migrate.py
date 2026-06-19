@@ -62,7 +62,6 @@ WHERE  c.type = 'mobile-number'
            WHERE  c2.user_id = c.user_id
              AND  c2.type = ANY(%(other_types)s)
        )
-ORDER BY c.user_id
 """
 
 
@@ -99,18 +98,23 @@ def move_credential_to_first(kc_url, token, realm, user_id, credential_id):
         pass
 
 
-def fetch_eligible(cur, realm_name, limit=None):
+def fetch_eligible(cur, realm_name, limit=None, username=None):
     sql = _SELECT_ELIGIBLE
+    params = {"realm_name": realm_name, "other_types": list(OTHER_2FA_TYPES)}
+    if username:
+        sql += "  AND u.username = %(username)s\n"
+        params["username"] = username
+    sql += "ORDER BY c.user_id\n"
     if limit:
         sql += f"LIMIT {limit}"
-    cur.execute(sql, {"realm_name": realm_name, "other_types": list(OTHER_2FA_TYPES)})
+    cur.execute(sql, params)
     return cur.fetchall()
 
 
-def dry_run_counts(conn, realm_name, batch_size):
+def dry_run_counts(conn, realm_name, batch_size, username=None):
     """Returns {"total": N, "effective": N}. Never modifies the database."""
     with conn.cursor() as cur:
-        all_rows = fetch_eligible(cur, realm_name, limit=None)
+        all_rows = fetch_eligible(cur, realm_name, limit=None, username=username)
     total = len(all_rows)
     effective = total if batch_size == 0 else min(total, batch_size)
     return {"total": total, "effective": effective}
@@ -118,7 +122,7 @@ def dry_run_counts(conn, realm_name, batch_size):
 
 def execute_migration(conn, realm_name, batch_size,
                       kc_url, client_id, client_secret=None,
-                      admin_user=None, admin_password=None):
+                      admin_user=None, admin_password=None, username=None):
     """
     For each eligible user, moves their preferred non-SMS 2FA credential to first
     position via the Keycloak Admin API. Keycloak handles priority assignment and
@@ -127,7 +131,7 @@ def execute_migration(conn, realm_name, batch_size,
     """
     limit = batch_size if batch_size > 0 else None
     with conn.cursor() as cur:
-        rows = fetch_eligible(cur, realm_name, limit=limit)
+        rows = fetch_eligible(cur, realm_name, limit=limit, username=username)
     if not rows:
         return {"updated": 0, "rows": []}
     token = _kc_admin_token(kc_url, client_id, client_secret, admin_user, admin_password)
@@ -198,11 +202,17 @@ def parse_args():
         default=os.environ.get("KC_ADMIN_PASSWORD"),
         help="Admin password for password grant (dev fallback). Or set KC_ADMIN_PASSWORD env var.",
     )
-    p.add_argument(
+    scope = p.add_mutually_exclusive_group()
+    scope.add_argument(
         "--batch-size",
         type=int,
         default=500,
         help="Max users to migrate in this run; 0 = no limit (default: 500)",
+    )
+    scope.add_argument(
+        "--username",
+        default=None,
+        help="Migrate only this username; mutually exclusive with --batch-size",
     )
     mode = p.add_mutually_exclusive_group()
     mode.add_argument(
@@ -243,18 +253,23 @@ def main():
 
     try:
         if args.dry_run:
-            counts = dry_run_counts(conn, args.realm, args.batch_size)
+            batch = args.batch_size if args.username is None else 0
+            counts = dry_run_counts(conn, args.realm, batch, username=args.username)
             print("DRY RUN — no changes made")
+            if args.username:
+                print(f"  Filter:                {args.username}")
             print(f"  Total eligible:        {counts['total']}")
-            if args.batch_size > 0:
-                print(f"  This run (limit {args.batch_size}): {counts['effective']}")
+            if batch > 0:
+                print(f"  This run (limit {batch}): {counts['effective']}")
             else:
                 print(f"  This run (no limit):   {counts['effective']}")
         else:
             result = execute_migration(
-                conn, args.realm, args.batch_size,
+                conn, args.realm,
+                args.batch_size if args.username is None else 0,
                 args.kc_url, args.kc_client_id, args.kc_client_secret,
                 args.kc_admin_user, args.kc_admin_password,
+                username=args.username,
             )
             if result["updated"] == 0:
                 print("No eligible users found. Nothing to do.")
