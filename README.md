@@ -1,8 +1,12 @@
 # keycloak-sms-priority-migration
 
-Raises the `PRIORITY` of SMS (`mobile-number`) credentials in Keycloak's
-PostgreSQL database so that other 2FA methods (OTP, WebAuthn, app) appear
-before SMS when a user has multiple methods configured.
+Reorders 2FA credentials in Keycloak so that non-SMS methods (OTP, WebAuthn,
+app) appear before SMS when a user has multiple methods configured.
+
+For each eligible user the migration calls the Keycloak Admin API to move the
+user's preferred non-SMS credential to first position. Keycloak updates
+credential priorities and invalidates its own cache, so the new order is
+visible to users on their very next login.
 
 Only users where **SMS is currently at position 1** and who have **at least one
 other 2FA method** are affected. Users with SMS only, or whose SMS is already
@@ -14,6 +18,66 @@ not first, are left untouched.
 uv sync
 ```
 
+## Authentication
+
+The migration calls the Keycloak Admin REST API and needs a token from the
+`master` realm. Two options:
+
+### Recommended: service account
+
+A service account is a clientcredentials-based identity — no human login, no
+interactive prompts. The client authenticates with a secret instead of a
+username and password.
+
+#### Step 1 — Create a dedicated client
+
+1. Open the Keycloak Admin Console and switch to the **master** realm using
+   the realm dropdown in the top-left corner.
+2. Go to **Clients** → **Create client**.
+3. Set **Client type** to `OpenID Connect` and choose a **Client ID**
+   (e.g. `migration-tool`). Click **Next**.
+4. On the *Capability config* screen:
+   - Turn **Client authentication** ON.
+   - Turn **Authorization** OFF.
+   - Under *Authentication flow* uncheck everything and check only
+     **Service accounts roles**.
+   - Click **Next**, then **Save**.
+
+#### Step 2 — Copy the client secret
+
+Open the **Credentials** tab of the newly created client and copy the
+**Client secret**. Store it in the `KC_CLIENT_SECRET` environment variable
+when running the migration.
+
+#### Step 3 — Assign the manage-users role
+
+The service account needs permission to manage user credentials in the
+target realm. In Keycloak each realm is represented by a dedicated client
+inside the master realm (named `<realm-name>-realm`), and that client exposes
+fine-grained management roles.
+
+1. On the client's detail page open the **Service accounts roles** tab.
+2. Click **Assign role**.
+3. In the dialog change the filter from *"Filter by realm roles"* to
+   **"Filter by clients"**.
+4. Search for `<your-target-realm>-realm` (e.g. `myrealm-realm`).
+5. Select **manage-users** and click **Assign**.
+
+#### Running the migration
+
+```bash
+KC_CLIENT_SECRET=<secret> uv run python migrate.py \
+  --realm <realm-name> \
+  --kc-url https://keycloak.example.com \
+  --kc-client-id migration-tool \
+  ...
+```
+
+### Alternative: admin user + password (dev / testing)
+
+Pass `--kc-admin-user` and `--kc-admin-password` (or `KC_ADMIN_PASSWORD`).
+Uses `admin-cli` with a direct grant.
+
 ## Usage
 
 ```
@@ -23,10 +87,14 @@ uv run python migrate.py \
   --db-port 5432 \
   --db-name keycloak \
   --db-user keycloak \
-  [--db-password <pw>]    # or export DB_PASSWORD=<pw>
-  [--priority 99]         # target SMS priority (default: 99)
-  [--batch-size 500]      # max users per run; 0 = no limit (default: 500)
-  [--dry-run | --execute] # dry-run is the default
+  [--db-password <pw>]          # or export DB_PASSWORD=<pw>
+  --kc-url <url>                # e.g. https://keycloak.example.com (required for --execute)
+  [--kc-client-id <id>]         # service account client ID (default: admin-cli)
+  [--kc-client-secret <secret>] # or export KC_CLIENT_SECRET=<secret>
+  [--kc-admin-user <user>]      # dev fallback (default: admin)
+  [--kc-admin-password <pw>]    # dev fallback, or export KC_ADMIN_PASSWORD=<pw>
+  [--batch-size 500]            # max users per run; 0 = no limit (default: 500)
+  [--dry-run | --execute]       # dry-run is the default
 ```
 
 ## Gradual rollout (two runs)
@@ -34,8 +102,9 @@ uv run python migrate.py \
 ### 1. Dry-run first — check the numbers
 
 ```bash
-uv run python migrate.py --realm myrealm --db-host db.example.com --db-name keycloak \
-  --db-user keycloak --db-password secret --batch-size 500
+uv run python migrate.py --realm myrealm \
+  --db-host db.example.com --db-name keycloak --db-user keycloak \
+  --batch-size 500
 ```
 
 Output example:
@@ -48,18 +117,22 @@ DRY RUN — no changes made
 ### 2. Run 1 — first 500 users
 
 ```bash
-uv run python migrate.py --realm myrealm --db-host db.example.com --db-name keycloak \
-  --db-user keycloak --db-password secret --batch-size 500 --execute
+KC_CLIENT_SECRET=<secret> uv run python migrate.py --realm myrealm \
+  --db-host db.example.com --db-name keycloak --db-user keycloak \
+  --kc-url https://keycloak.example.com --kc-client-id migration-tool \
+  --batch-size 500 --execute
 ```
 
-Monitor for issues. Re-run in dry-run mode to confirm the remaining eligible
+Monitor for errors. Re-run in dry-run mode to confirm the remaining eligible
 count dropped to ~743 (total − 500).
 
 ### 3. Run 2 — all remaining users
 
 ```bash
-uv run python migrate.py --realm myrealm --db-host db.example.com --db-name keycloak \
-  --db-user keycloak --db-password secret --batch-size 0 --execute
+KC_CLIENT_SECRET=<secret> uv run python migrate.py --realm myrealm \
+  --db-host db.example.com --db-name keycloak --db-user keycloak \
+  --kc-url https://keycloak.example.com --kc-client-id migration-tool \
+  --batch-size 0 --execute
 ```
 
 A final dry-run should report `Total eligible: 0`.
@@ -69,7 +142,7 @@ A final dry-run should report `Total eligible: 0`.
 Each `--execute` run writes a JSON-lines file to `logs/migration-<timestamp>.jsonl`:
 
 ```json
-{"credential_id": "...", "user_id": "...", "username": "alice", "old_priority": 10, "new_priority": 99}
+{"user_id": "...", "username": "alice", "sms_credential_id": "...", "promoted_credential_id": "..."}
 ```
 
 Log files are gitignored.
@@ -111,12 +184,12 @@ credential types. JARs are cached locally and gitignored.
 
 | Username | Credentials | Expected after migration |
 |----------|-------------|--------------------------|
-| `user_eligible_otp` | mobile-number(10) + otp(20) | ✅ SMS moves to 99 |
-| `user_eligible_webauthn` | mobile-number(10) + webauthn(20) | ✅ SMS moves to 99 |
+| `user_eligible_otp` | mobile-number(10) + otp(20) | ✅ otp moves to first |
+| `user_eligible_webauthn` | mobile-number(10) + webauthn(20) | ✅ webauthn moves to first |
 | `user_sms_only` | mobile-number(10) only | ⛔ skipped |
 | `user_otp_first` | otp(10) + mobile-number(20) | ⛔ skipped |
 
-Password for all users: **`Test1234!`**
+Password for all users: **`pass`**
 
 ### 3. Verify credential order before migration
 
@@ -126,8 +199,8 @@ Open the Keycloak Account Console and check the credential order:
 http://localhost:8080/realms/dev/account/#/security/signingin
 ```
 
-Log in as `user_eligible_otp` / `Test1234!`. Under **Two-factor
-authentication**, mobile-number (priority 10) is listed before OTP (priority 20).
+Log in as `user_eligible_otp` / `pass`. Under **Two-factor authentication**,
+mobile-number is listed before OTP.
 
 To test login with TOTP, add the following secret to any authenticator app
 (Google Authenticator, Aegis, etc.):
@@ -145,27 +218,37 @@ docker compose logs -f keycloak | grep -i "mobile\|sms\|otp"
 
 ### 4. Run the migration
 
+The local stack uses `admin` / `admin` with no TOTP, so the password-grant
+fallback works here:
+
 ```bash
 # Dry-run — check the numbers (expect Total eligible: 2)
-uv run python migrate.py --realm dev --db-password keycloak
+uv run python migrate.py --realm dev --db-password keycloak \
+  --kc-url http://localhost:8080 --kc-admin-password admin
 
 # Batch 1 — migrate one user
-uv run python migrate.py --realm dev --db-password keycloak --batch-size 1 --execute
+uv run python migrate.py --realm dev --db-password keycloak \
+  --kc-url http://localhost:8080 --kc-admin-password admin \
+  --batch-size 1 --execute
 
 # Dry-run again — expect Total eligible: 1
-uv run python migrate.py --realm dev --db-password keycloak
+uv run python migrate.py --realm dev --db-password keycloak \
+  --kc-url http://localhost:8080 --kc-admin-password admin
 
 # Batch 2 — migrate the rest
-uv run python migrate.py --realm dev --db-password keycloak --batch-size 0 --execute
+uv run python migrate.py --realm dev --db-password keycloak \
+  --kc-url http://localhost:8080 --kc-admin-password admin \
+  --batch-size 0 --execute
 
 # Final dry-run — expect Total eligible: 0
-uv run python migrate.py --realm dev --db-password keycloak
+uv run python migrate.py --realm dev --db-password keycloak \
+  --kc-url http://localhost:8080 --kc-admin-password admin
 ```
 
 ### 5. Verify credential order after migration
 
-Reload the Account Console. For `user_eligible_otp`, OTP (priority 20) now
-appears before mobile-number (priority 99).
+Reload the Account Console. For `user_eligible_otp`, OTP now appears before
+mobile-number (SMS).
 
 ### 6. Reset and repeat
 
@@ -195,5 +278,4 @@ WHERE  u.username = 'alice'
 ORDER BY c.priority;
 ```
 
-SMS (`mobile-number`) should now appear last (priority 99), with OTP/WebAuthn/app
-credentials above it.
+SMS (`mobile-number`) should appear after OTP/WebAuthn/app credentials.
