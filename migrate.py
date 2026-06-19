@@ -177,13 +177,13 @@ def parse_args():
     )
     p.add_argument(
         "--kc-url",
-        default=None,
-        help="Keycloak base URL, e.g. http://localhost:8080 (required for --execute)",
+        default="http://localhost:8080",
+        help="Keycloak base URL (default: http://localhost:8080)",
     )
     p.add_argument(
         "--kc-client-id",
-        default="admin-cli",
-        help="Client ID for Keycloak authentication (default: admin-cli)",
+        default="migration-tool",
+        help="Client ID for Keycloak authentication (default: migration-tool)",
     )
     p.add_argument(
         "--kc-client-secret",
@@ -239,10 +239,6 @@ def main():
         conn = connect(args)
     except psycopg2.OperationalError as exc:
         print(f"ERROR: Could not connect to database: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    if not args.dry_run and not args.kc_url:
-        print("ERROR: --kc-url is required when using --execute", file=sys.stderr)
         sys.exit(1)
 
     try:

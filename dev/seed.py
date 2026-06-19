@@ -93,6 +93,9 @@ _TEST_USERS = [
 
 _DEFAULT_PASSWORD = "pass"
 
+_DEV_CLIENT_ID = "migration-tool"
+_DEV_CLIENT_SECRET = "dev-migration-secret"
+
 # ---------------------------------------------------------------------------
 # HTTP helpers
 # ---------------------------------------------------------------------------
@@ -280,6 +283,62 @@ def insert_credentials(db_conn, user_id, credentials):
     db_conn.commit()
 
 
+def setup_service_account(kc_url, token, realm):
+    """Provision migration-tool service account client in master realm for local dev."""
+    # Create client (409 = already exists, proceed anyway)
+    status, _ = _post(
+        f"{kc_url}/admin/realms/master/clients",
+        token,
+        {
+            "clientId": _DEV_CLIENT_ID,
+            "protocol": "openid-connect",
+            "publicClient": False,
+            "serviceAccountsEnabled": True,
+            "directAccessGrantsEnabled": False,
+            "authorizationServicesEnabled": False,
+        },
+    )
+    if status == 409:
+        print(f"  client '{_DEV_CLIENT_ID}' already exists in master realm")
+    else:
+        print(f"  created client '{_DEV_CLIENT_ID}' in master realm")
+
+    # Get client UUID
+    clients = _get(f"{kc_url}/admin/realms/master/clients?clientId={_DEV_CLIENT_ID}", token)
+    client_uuid = clients[0]["id"]
+
+    # Fix the secret to the known dev value (idempotent)
+    client_rep = _get(f"{kc_url}/admin/realms/master/clients/{client_uuid}", token)
+    client_rep["secret"] = _DEV_CLIENT_SECRET
+    _put(f"{kc_url}/admin/realms/master/clients/{client_uuid}", token, client_rep)
+
+    # Get {realm}-realm client UUID in master
+    realm_clients = _get(
+        f"{kc_url}/admin/realms/master/clients?clientId={realm}-realm", token
+    )
+    realm_client_uuid = realm_clients[0]["id"]
+
+    # Get manage-users role from {realm}-realm client
+    role = _get(
+        f"{kc_url}/admin/realms/master/clients/{realm_client_uuid}/roles/manage-users",
+        token,
+    )
+
+    # Get service account user for migration-tool
+    sa_user = _get(
+        f"{kc_url}/admin/realms/master/clients/{client_uuid}/service-account-user",
+        token,
+    )
+
+    # Assign manage-users role (idempotent)
+    _post(
+        f"{kc_url}/admin/realms/master/users/{sa_user['id']}/role-mappings/clients/{realm_client_uuid}",
+        token,
+        [role],
+    )
+    print(f"  assigned manage-users ({realm}-realm) to service account")
+
+
 def seed(args):
     print("\n1. Downloading plugin JARs …")
     download_jars()
@@ -312,6 +371,9 @@ def seed(args):
     finally:
         db_conn.close()
 
+    print(f"\n6. Provisioning service account …")
+    setup_service_account(args.kc_url, token, args.realm)
+
     print(f"""
 Done! Test users created in realm '{args.realm}' with password '{_DEFAULT_PASSWORD}'.
 
@@ -332,6 +394,9 @@ SMS OTP codes are printed to Keycloak logs (no gateway configured):
 
 Account Console (see credential order):
   http://localhost:8080/realms/{args.realm}/account/#/security/signingin
+
+Run the migration:
+  KC_CLIENT_SECRET={_DEV_CLIENT_SECRET} uv run python migrate.py --realm {args.realm} --db-password keycloak
 """)
 
 

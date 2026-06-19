@@ -88,8 +88,8 @@ uv run python migrate.py \
   --db-name keycloak \
   --db-user keycloak \
   [--db-password <pw>]          # or export DB_PASSWORD=<pw>
-  --kc-url <url>                # e.g. https://keycloak.example.com (required for --execute)
-  [--kc-client-id <id>]         # service account client ID (default: admin-cli)
+  [--kc-url <url>]              # default: http://localhost:8080
+  [--kc-client-id <id>]         # service account client ID (default: migration-tool)
   [--kc-client-secret <secret>] # or export KC_CLIENT_SECRET=<secret>
   [--kc-admin-user <user>]      # dev fallback (default: admin)
   [--kc-admin-password <pw>]    # dev fallback, or export KC_ADMIN_PASSWORD=<pw>
@@ -218,31 +218,29 @@ docker compose logs -f keycloak | grep -i "mobile\|sms\|otp"
 
 ### 4. Run the migration
 
-The local stack uses `admin` / `admin` with no TOTP, so the password-grant
-fallback works here:
+The seed script provisions a `migration-tool` service account with secret
+`dev-migration-secret`, so the recommended auth path works out of the box:
 
 ```bash
 # Dry-run — check the numbers (expect Total eligible: 2)
-uv run python migrate.py --realm dev --db-password keycloak \
-  --kc-url http://localhost:8080 --kc-admin-password admin
+KC_CLIENT_SECRET=dev-migration-secret uv run python migrate.py \
+  --realm dev --db-password keycloak
 
 # Batch 1 — migrate one user
-uv run python migrate.py --realm dev --db-password keycloak \
-  --kc-url http://localhost:8080 --kc-admin-password admin \
-  --batch-size 1 --execute
+KC_CLIENT_SECRET=dev-migration-secret uv run python migrate.py \
+  --realm dev --db-password keycloak --batch-size 1 --execute
 
 # Dry-run again — expect Total eligible: 1
-uv run python migrate.py --realm dev --db-password keycloak \
-  --kc-url http://localhost:8080 --kc-admin-password admin
+KC_CLIENT_SECRET=dev-migration-secret uv run python migrate.py \
+  --realm dev --db-password keycloak
 
 # Batch 2 — migrate the rest
-uv run python migrate.py --realm dev --db-password keycloak \
-  --kc-url http://localhost:8080 --kc-admin-password admin \
-  --batch-size 0 --execute
+KC_CLIENT_SECRET=dev-migration-secret uv run python migrate.py \
+  --realm dev --db-password keycloak --batch-size 0 --execute
 
 # Final dry-run — expect Total eligible: 0
-uv run python migrate.py --realm dev --db-password keycloak \
-  --kc-url http://localhost:8080 --kc-admin-password admin
+KC_CLIENT_SECRET=dev-migration-secret uv run python migrate.py \
+  --realm dev --db-password keycloak
 ```
 
 ### 5. Verify credential order after migration
