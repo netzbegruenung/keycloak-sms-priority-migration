@@ -148,6 +148,82 @@ Each `--execute` run writes a JSON-lines file to `logs/migration-<timestamp>.jso
 
 Log files are gitignored.
 
+## Production deployment
+
+Releases are published to
+[GitHub Releases](https://github.com/netzbegruenung/keycloak-sms-priority-migration/releases)
+as a Python wheel.
+
+### 1. One-time setup (run as root)
+
+```bash
+python3 -m venv /root/migrate-env
+/root/migrate-env/bin/pip install \
+  https://github.com/netzbegruenung/keycloak-sms-priority-migration/releases/download/v1.0.0/keycloak_sms_priority_migration-1.0.0-py3-none-any.whl
+```
+
+### 2. Set secrets (not stored on disk or in history)
+
+```bash
+export KC_CLIENT_SECRET='<client-secret>'
+export DB_PASSWORD='<db-password>'
+```
+
+### 3. Dry-run — verify eligible count
+
+```bash
+/root/migrate-env/bin/migrate \
+  --realm <realm> \
+  --db-host <host> --db-name keycloak --db-user keycloak \
+  --kc-url https://keycloak.example.com
+```
+
+### 4. Pilot run — your own account first
+
+```bash
+/root/migrate-env/bin/migrate \
+  --realm <realm> \
+  --db-host <host> --db-name keycloak --db-user keycloak \
+  --kc-url https://keycloak.example.com \
+  --username <your-username> --execute
+```
+
+Log in to the Account Console and confirm the credential order changed before proceeding.
+
+### 5. Batch 1 — first 500 users
+
+```bash
+/root/migrate-env/bin/migrate \
+  --realm <realm> \
+  --db-host <host> --db-name keycloak --db-user keycloak \
+  --kc-url https://keycloak.example.com \
+  --batch-size 500 --execute
+```
+
+Dry-run again to confirm the eligible count dropped by ~500, then continue.
+
+### 6. Batch 2 — all remaining users
+
+```bash
+/root/migrate-env/bin/migrate \
+  --realm <realm> \
+  --db-host <host> --db-name keycloak --db-user keycloak \
+  --kc-url https://keycloak.example.com \
+  --batch-size 0 --execute
+```
+
+A final dry-run should report `Total eligible: 0`. Audit logs are written to
+`logs/migration-<timestamp>.jsonl` in the working directory.
+
+### Publishing a new release
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The GitHub Actions workflow runs the test suite, builds the wheel, and attaches it to the release automatically.
+
 ## Tests
 
 The test suite uses an in-memory DuckDB database — no Docker or PostgreSQL needed.
