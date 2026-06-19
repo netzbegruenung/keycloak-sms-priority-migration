@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=42"]
+requires = ["setuptools>=42", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "keycloak-sms-priority-migration"
-version = "1.0.0"
+dynamic = ["version"]
 requires-python = ">=3.11"
 dependencies = [
     "psycopg2-binary>=2.9",
@@ -21,3 +21,5 @@ migrate = "migrate:main"
 
 [tool.setuptools]
 py-modules = ["migrate"]
+
+[tool.setuptools_scm]

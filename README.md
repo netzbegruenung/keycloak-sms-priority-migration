@@ -152,14 +152,13 @@ Log files are gitignored.
 
 Releases are published to
 [GitHub Releases](https://github.com/netzbegruenung/keycloak-sms-priority-migration/releases)
-as a Python wheel.
+as a Python wheel. Copy the `.whl` asset URL from the latest release, then:
 
 ### 1. One-time setup (run as root)
 
 ```bash
 python3 -m venv /root/migrate-env
-/root/migrate-env/bin/pip install \
-  https://github.com/netzbegruenung/keycloak-sms-priority-migration/releases/download/v1.0.0/keycloak_sms_priority_migration-1.0.0-py3-none-any.whl
+/root/migrate-env/bin/pip install <wheel-url>
 ```
 
 ### 2. Set secrets (not stored on disk or in history)
