@@ -58,7 +58,6 @@ wheels = [
 
 [[package]]
 name = "keycloak-sms-priority-migration"
-version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "psycopg2-binary" },

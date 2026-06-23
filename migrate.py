@@ -136,13 +136,25 @@ def execute_migration(conn, realm_name, batch_size,
         return {"updated": 0, "rows": []}
     token = _kc_admin_token(kc_url, client_id, client_secret, admin_user, admin_password)
     updated = 0
+    skipped = 0
+    successful_rows = []
     for row in rows:
-        move_credential_to_first(
-            kc_url, token, realm_name,
-            row["user_id"], row["preferred_cred_id"],
-        )
-        updated += 1
-    return {"updated": updated, "rows": list(rows)}
+        try:
+            move_credential_to_first(
+                kc_url, token, realm_name,
+                row["user_id"], row["preferred_cred_id"],
+            )
+            updated += 1
+            successful_rows.append(row)
+        except urllib.error.HTTPError as exc:
+            print(
+                f"WARNING: moveToFirst failed for user {row['username']!r} "
+                f"(user_id={row['user_id']}, credential_id={row['preferred_cred_id']}): "
+                f"HTTP {exc.code} — skipping",
+                file=sys.stderr,
+            )
+            skipped += 1
+    return {"updated": updated, "skipped": skipped, "rows": successful_rows}
 
 
 def write_audit_log(rows):
@@ -271,12 +283,18 @@ def main():
                 args.kc_admin_user, args.kc_admin_password,
                 username=args.username,
             )
-            if result["updated"] == 0:
+            if result["updated"] == 0 and result["skipped"] == 0:
                 print("No eligible users found. Nothing to do.")
             else:
-                log_path = write_audit_log(result["rows"])
-                print(f"Promoted preferred 2FA to first position for {result['updated']} user(s).")
-                print(f"Audit log: {log_path}")
+                if result["rows"]:
+                    log_path = write_audit_log(result["rows"])
+                    print(f"Promoted preferred 2FA to first position for {result['updated']} user(s).")
+                    print(f"Audit log: {log_path}")
+                if result["skipped"]:
+                    print(
+                        f"WARNING: {result['skipped']} user(s) skipped due to Keycloak API errors (see stderr for details).",
+                        file=sys.stderr,
+                    )
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)

@@ -1,3 +1,5 @@
+import urllib.error
+
 import pytest
 from unittest.mock import patch
 
@@ -168,3 +170,49 @@ def test_two_run_rollout(db_conn):
         assert run2["updated"] == 2
 
     assert mock_move.call_count == 5
+
+
+# ---------------------------------------------------------------------------
+# HTTP error handling
+# ---------------------------------------------------------------------------
+
+def _http_error(code):
+    return urllib.error.HTTPError(url="", code=code, msg="", hdrs={}, fp=None)
+
+
+def test_404_skips_user_and_continues(db_conn):
+    seed(db_conn, REALM, [eligible_user("alice")])
+    result, mock_move = _run(db_conn, side_effect=_http_error(404))
+    assert result["updated"] == 0
+    assert result["skipped"] == 1
+    assert result["rows"] == []
+    mock_move.assert_called_once()
+
+
+def test_404_on_one_of_many_continues_rest(db_conn):
+    seed(db_conn, REALM, [eligible_user("alice"), eligible_user("bob"), eligible_user("carol")])
+    calls = []
+
+    def side_effect(kc_url, token, realm, user_id, cred_id):
+        calls.append(user_id)
+        if len(calls) == 2:
+            raise _http_error(404)
+
+    with patch("migrate._kc_admin_token", return_value="fake-token"), \
+         patch("migrate.move_credential_to_first", side_effect=side_effect):
+        result = execute_migration(
+            db_conn, REALM, 0, KC_URL, KC_CLIENT_ID, client_secret="fake-secret",
+        )
+
+    assert result["updated"] == 2
+    assert result["skipped"] == 1
+    assert len(result["rows"]) == 2
+    assert len(calls) == 3
+
+
+def test_non_404_http_error_also_skips(db_conn):
+    seed(db_conn, REALM, [eligible_user("alice")])
+    result, mock_move = _run(db_conn, side_effect=_http_error(500))
+    assert result["updated"] == 0
+    assert result["skipped"] == 1
+    mock_move.assert_called_once()
