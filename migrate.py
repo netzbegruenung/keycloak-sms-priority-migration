@@ -139,21 +139,33 @@ def execute_migration(conn, realm_name, batch_size,
     skipped = 0
     successful_rows = []
     for row in rows:
-        try:
-            move_credential_to_first(
-                kc_url, token, realm_name,
-                row["user_id"], row["preferred_cred_id"],
-            )
-            updated += 1
-            successful_rows.append(row)
-        except urllib.error.HTTPError as exc:
-            print(
-                f"WARNING: moveToFirst failed for user {row['username']!r} "
-                f"(user_id={row['user_id']}, credential_id={row['preferred_cred_id']}): "
-                f"HTTP {exc.code} — skipping",
-                file=sys.stderr,
-            )
-            skipped += 1
+        for attempt in range(2):
+            try:
+                move_credential_to_first(
+                    kc_url, token, realm_name,
+                    row["user_id"], row["preferred_cred_id"],
+                )
+                updated += 1
+                successful_rows.append(row)
+                break
+            except urllib.error.HTTPError as exc:
+                if exc.code == 401 and attempt == 0:
+                    # Token expired mid-run — refresh and retry this user once
+                    token = _kc_admin_token(kc_url, client_id, client_secret, admin_user, admin_password)
+                    continue
+                if exc.code == 401:
+                    raise RuntimeError(
+                        "Keycloak returned 401 after token refresh — "
+                        "check client credentials and permissions."
+                    ) from exc
+                print(
+                    f"WARNING: moveToFirst failed for user {row['username']!r} "
+                    f"(user_id={row['user_id']}, credential_id={row['preferred_cred_id']}): "
+                    f"HTTP {exc.code} — skipping",
+                    file=sys.stderr,
+                )
+                skipped += 1
+                break
     return {"updated": updated, "skipped": skipped, "rows": successful_rows}
 
 

@@ -216,3 +216,34 @@ def test_non_404_http_error_also_skips(db_conn):
     assert result["updated"] == 0
     assert result["skipped"] == 1
     mock_move.assert_called_once()
+
+
+def test_401_refreshes_token_and_retries(db_conn):
+    seed(db_conn, REALM, [eligible_user("alice")])
+    call_count = {"n": 0}
+
+    def move_side_effect(kc_url, token, realm, user_id, cred_id):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise _http_error(401)
+
+    with patch("migrate._kc_admin_token", side_effect=["token-1", "token-2"]) as mock_token, \
+         patch("migrate.move_credential_to_first", side_effect=move_side_effect):
+        result = execute_migration(
+            db_conn, REALM, 0, KC_URL, KC_CLIENT_ID, client_secret="fake-secret",
+        )
+
+    assert result["updated"] == 1
+    assert result["skipped"] == 0
+    assert mock_token.call_count == 2
+
+
+def test_401_after_refresh_aborts(db_conn):
+    seed(db_conn, REALM, [eligible_user("alice")])
+
+    with patch("migrate._kc_admin_token", side_effect=["token-1", "token-2"]), \
+         patch("migrate.move_credential_to_first", side_effect=_http_error(401)):
+        with pytest.raises(RuntimeError, match="401 after token refresh"):
+            execute_migration(
+                db_conn, REALM, 0, KC_URL, KC_CLIENT_ID, client_secret="fake-secret",
+            )
